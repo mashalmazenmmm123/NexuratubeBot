@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import uuid
 import requests
 from flask import Flask, request, jsonify
@@ -57,17 +58,94 @@ def extract_info(url):
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         return ydl.extract_info(url, download=False)
 
+def _resolve_video_height(format_info):
+    """Infer the display height from common yt-dlp metadata fields."""
+    height = format_info.get("height")
+    if height:
+        return int(height)
+
+    quality_label = format_info.get("quality_label") or format_info.get("format_note") or ""
+    if quality_label:
+        match = re.search(r"(\d{3,4})p", str(quality_label), re.IGNORECASE)
+        if match:
+            return int(match.group(1))
+
+    width = format_info.get("width")
+    if width:
+        width = int(width)
+        if width >= 1920:
+            return 1080
+        if width >= 1280:
+            return 720
+        if width >= 854:
+            return 480
+        if width >= 640:
+            return 360
+
+    tbr = format_info.get("tbr")
+    if tbr is not None:
+        if tbr >= 3500:
+            return 1080
+        if tbr >= 2000:
+            return 720
+        if tbr >= 1200:
+            return 480
+        if tbr >= 600:
+            return 360
+
+    return None
+
+
 def get_qualities(info):
-    """إرجاع قاموس {height: format_dict} للجودات المطلوبة (360, 480, 720, 1080)"""
+    """Return a best-effort map {height: format_dict} for common quality values.
+
+    Some sites such as Instagram expose only quality labels or tbr values instead of
+    a strict height integer. This function accepts those variants and falls back to the
+    strongest video format when exact target heights are unavailable.
+    """
     target_heights = [360, 480, 720, 1080]
     formats = info.get("formats", [])
     available = {}
+
     for f in formats:
-        height = f.get("height")
-        if height in target_heights and f.get("vcodec") != "none":
-            # تفضيل صيغة mp4 إن وجدت
-            if height not in available or f.get("ext") == "mp4":
+        if f.get("vcodec") == "none" and f.get("acodec") != "none":
+            continue
+        if f.get("vcodec") == "none" and not f.get("width") and not f.get("height"):
+            continue
+
+        height = _resolve_video_height(f)
+        if height is None:
+            continue
+
+        if height in target_heights:
+            if height not in available or f.get("ext") == "mp4" or (f.get("tbr") or 0) > (available[height].get("tbr") or 0):
                 available[height] = f
+
+    if available:
+        return available
+
+    fallback = []
+    for f in formats:
+        if f.get("vcodec") == "none" and f.get("acodec") != "none":
+            continue
+        if f.get("vcodec") == "none" and not f.get("width") and not f.get("height"):
+            continue
+        if f.get("ext") in ("mp4", "m4v", "webm") or f.get("protocol") in ("http", "https"):
+            fallback.append(f)
+
+    best = None
+    for f in fallback:
+        score = (f.get("tbr") or 0) + (f.get("height") or 0) * 10
+        if best is None or score > best[0]:
+            best = (score, f)
+
+    if best:
+        best_format = best[1]
+        height = _resolve_video_height(best_format)
+        if height is None:
+            height = 720
+        available[height] = best_format
+
     return available
 
 # ---------- Webhook ----------
