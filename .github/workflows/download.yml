@@ -1,0 +1,41 @@
+name: Download and Send Video
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'Video URL'
+        required: true
+      format_id:
+        description: 'yt-dlp format ID'
+        required: true
+      chat_id:
+        description: 'Telegram chat ID'
+        required: true
+      message_id:
+        description: 'Telegram message ID to edit'
+        required: false
+
+jobs:
+  download-send:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install yt-dlp requests
+
+      - name: Download and Send
+        env:
+          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ github.event.inputs.chat_id }}
+          MESSAGE_ID: ${{ github.event.inputs.message_id }}
+          URL: ${{ github.event.inputs.url }}
+          FORMAT_ID: ${{ github.event.inputs.format_id }}
+        run: python scripts/download_and_send.py
