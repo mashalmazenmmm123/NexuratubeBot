@@ -1,0 +1,64 @@
+import os
+import sys
+import requests
+import yt_dlp
+
+BOT_TOKEN = os.environ["BOT_TOKEN"]
+CHAT_ID = os.environ["CHAT_ID"]
+MESSAGE_ID = os.environ.get("MESSAGE_ID")
+URL = os.environ["URL"]
+FORMAT_ID = os.environ["FORMAT_ID"]
+MAX_SIZE = 50 * 1024 * 1024  # 50 MB
+
+TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
+
+def send_message(text):
+    requests.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": CHAT_ID, "text": text})
+
+def edit_message(message_id, text):
+    requests.post(f"{TELEGRAM_API}/editMessageText", json={
+        "chat_id": CHAT_ID, "message_id": message_id, "text": text
+    })
+
+def main():
+    if MESSAGE_ID:
+        edit_message(MESSAGE_ID, "⏳ جاري تنزيل الفيديو...")
+
+    ydl_opts = {
+        "format": FORMAT_ID,
+        "outtmpl": "video.%(ext)s",
+        "quiet": True,
+        "no_warnings": True,
+        "merge_output_format": "mp4",
+    }
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(URL, download=True)
+            filename = ydl.prepare_filename(info)
+    except Exception as e:
+        send_message(f"❌ فشل التنزيل: {str(e)}")
+        sys.exit(1)
+
+    # التحقق من الحجم
+    filesize = os.path.getsize(filename)
+    if filesize > MAX_SIZE:
+        send_message(
+            f"⚠️ حجم الفيديو ({filesize / (1024*1024):.1f} MB) "
+            f"يتجاوز الحد المسموح 50 MB."
+        )
+        sys.exit(0)
+
+    # إرسال الفيديو إلى تيليجرام
+    try:
+        with open(filename, "rb") as f:
+            files = {"video": f}
+            data = {"chat_id": CHAT_ID, "caption": info.get("title", "")}
+            resp = requests.post(f"{TELEGRAM_API}/sendVideo", data=data, files=files)
+            if resp.status_code != 200:
+                send_message(f"❌ فشل إرسال الفيديو: {resp.text}")
+    except Exception as e:
+        send_message(f"❌ خطأ أثناء الإرسال: {str(e)}")
+
+if __name__ == "__main__":
+    main()
