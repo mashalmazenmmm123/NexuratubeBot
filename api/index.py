@@ -1,351 +1,44 @@
-import os
-import json
-import re
-import uuid
-import requests
+import asyncio
+import logging
 from flask import Flask, request, jsonify
-import yt_dlp
-import redis
+from telegram import Update
+from bot import bot_app
+from bot.config import WEBHOOK_SECRET
 
-from api.yt_utils import build_yt_dlp_options
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET")
-GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
-GITHUB_REPO = os.environ.get("GITHUB_REPO")          # مثال: "username/repo"
-GITHUB_WORKFLOW_ID = os.environ.get("GITHUB_WORKFLOW_ID")  # مثال: "download.yml"
-REDIS_URL = os.environ.get("REDIS_URL")              # رابط Upstash Redis
+async def _process_update_async(update_data: dict):
+    """معالجة تحديث تلجرام بشكل غير متزامن."""
+    update = Update.de_json(update_data, bot_app.bot)
+    await bot_app.process_update(update)
 
-r = redis.from_url(REDIS_URL) if REDIS_URL else None
-
-TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else None
-WELCOME_TEXT = (
-    "مرحبا بك في NexuraTube\n\n"
-    "أرسل لي رابط فيديو من YouTube أو مواقع مدعومة، "
-    "ثم اختر الجودة التي تريدها."
-)
-
-# ---------- دوال مساعدة ----------
-def send_message(chat_id, text, reply_markup=None, parse_mode=None):
-    if not TELEGRAM_API:
-        return
-    payload = {"chat_id": chat_id, "text": text}
-    if reply_markup:
-        payload["reply_markup"] = json.dumps(reply_markup)
-    if parse_mode:
-        payload["parse_mode"] = parse_mode
-    requests.post(f"{TELEGRAM_API}/sendMessage", json=payload, timeout=20)
-
-def edit_message(chat_id, message_id, text, reply_markup=None):
-    if not TELEGRAM_API:
-        return
-    payload = {"chat_id": chat_id, "message_id": message_id, "text": text}
-    if reply_markup:
-        payload["reply_markup"] = json.dumps(reply_markup)
-    requests.post(f"{TELEGRAM_API}/editMessageText", json=payload, timeout=20)
-
-def send_photo(chat_id, photo_url, caption, reply_markup=None):
-    if not TELEGRAM_API:
-        return
-    payload = {"chat_id": chat_id, "photo": photo_url, "caption": caption}
-    if reply_markup:
-        payload["reply_markup"] = json.dumps(reply_markup)
-    requests.post(f"{TELEGRAM_API}/sendPhoto", json=payload, timeout=20)
-
-def send_chat_action(chat_id, action="typing"):
-    if not TELEGRAM_API:
-        return
-    requests.post(f"{TELEGRAM_API}/sendChatAction", json={"chat_id": chat_id, "action": action}, timeout=20)
-
-
-def resolve_github_default_branch():
-    if not GITHUB_TOKEN or not GITHUB_REPO:
-        return "main"
-    try:
-        resp = requests.get(
-            f"https://api.github.com/repos/{GITHUB_REPO}",
-            headers={
-                "Authorization": f"Bearer {GITHUB_TOKEN}",
-                "Accept": "application/vnd.github+json",
-            },
-            timeout=20,
-        )
-        if resp.ok:
-            data = resp.json()
-            if isinstance(data, dict) and data.get("default_branch"):
-                return data["default_branch"]
-    except Exception:
-        pass
-    return "main"
-
-def extract_info(url):
-    ydl_opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "skip_download": True,
-        "noplaylist": True,
-        "extract_flat": False,
-    }
-    ydl_opts.update(build_yt_dlp_options())
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        return ydl.extract_info(url, download=False)
-
-def _resolve_video_height(format_info):
-    """Infer the display height from common yt-dlp metadata fields."""
-    height = format_info.get("height")
-    if height:
-        return int(height)
-
-    quality_label = format_info.get("quality_label") or format_info.get("format_note") or ""
-    if quality_label:
-        match = re.search(r"(\d{3,4})p", str(quality_label), re.IGNORECASE)
-        if match:
-            return int(match.group(1))
-
-    width = format_info.get("width")
-    if width:
-        width = int(width)
-        if width >= 1920:
-            return 1080
-        if width >= 1280:
-            return 720
-        if width >= 854:
-            return 480
-        if width >= 640:
-            return 360
-
-    tbr = format_info.get("tbr")
-    if tbr is not None:
-        if tbr >= 3500:
-            return 1080
-        if tbr >= 2000:
-            return 720
-        if tbr >= 1200:
-            return 480
-        if tbr >= 600:
-            return 360
-
-    return None
-
-
-def get_qualities(info):
-    """Return a best-effort map {height: format_dict} for common quality values.
-
-    Some sites such as Instagram expose only quality labels or tbr values instead of
-    a strict height integer. This function accepts those variants and falls back to the
-    strongest video format when exact target heights are unavailable.
-    """
-    target_heights = [360, 480, 720, 1080]
-    formats = info.get("formats", [])
-    available = {}
-
-    for f in formats:
-        if f.get("vcodec") == "none" and f.get("acodec") != "none":
-            continue
-        if f.get("vcodec") == "none" and not f.get("width") and not f.get("height"):
-            continue
-
-        height = _resolve_video_height(f)
-        if height is None:
-            continue
-
-        if height in target_heights:
-            if height not in available or f.get("ext") == "mp4" or (f.get("tbr") or 0) > (available[height].get("tbr") or 0):
-                available[height] = f
-
-    if available:
-        return available
-
-    fallback = []
-    for f in formats:
-        if f.get("vcodec") == "none" and f.get("acodec") != "none":
-            continue
-        if f.get("vcodec") == "none" and not f.get("width") and not f.get("height"):
-            continue
-        if f.get("ext") in ("mp4", "m4v", "webm") or f.get("protocol") in ("http", "https"):
-            fallback.append(f)
-
-    best = None
-    for f in fallback:
-        score = (f.get("tbr") or 0) + (f.get("height") or 0) * 10
-        if best is None or score > best[0]:
-            best = (score, f)
-
-    if best:
-        best_format = best[1]
-        height = _resolve_video_height(best_format)
-        if height is None:
-            height = 720
-        available[height] = best_format
-
-    return available
-
-
-def format_quality_label(format_info, height=None):
-    height = height or _resolve_video_height(format_info) or 0
-    height_text = f"{height}p" if height else "بدون تسمية"
-    label = format_info.get("quality_label") or format_info.get("format_note") or height_text
-    return str(label)
-
-# ---------- Webhook ----------
 @app.route("/api/webhook", methods=["POST"])
 def webhook():
-    # التحقق من السر
+    """نقطة نهاية Webhook لتلجرام."""
+    # التحقق من السر (إذا تم تعيينه)
     if WEBHOOK_SECRET:
-        secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
-        if secret != WEBHOOK_SECRET:
-            return jsonify({"ok": False}), 403
-
-    update = request.get_json()
-    if not update:
-        return jsonify({"ok": True})
-
-    # معالجة الضغط على زر
-    if "callback_query" in update:
-        return handle_callback(update["callback_query"])
-
-    # معالجة الرسائل النصية
-    message = update.get("message")
-    if not message:
-        return jsonify({"ok": True})
-
-    chat_id = message["chat"]["id"]
-    text = (message.get("text") or "").strip()
-
-    if text in ("/start", "/help"):
-        send_message(chat_id, WELCOME_TEXT)
-        return jsonify({"ok": True})
-
-    if not text.startswith("http"):
-        send_message(chat_id, "الرجاء إرسال رابط فيديو صالح.\n\nأو استخدم /start لعرض التعليمات.")
-        return jsonify({"ok": True})
-
-    # إرسال حالة انتظار
-    send_chat_action(chat_id, "typing")
-    wait_resp = requests.post(
-        f"{TELEGRAM_API}/sendMessage",
-        json={"chat_id": chat_id, "text": "🔍 جاري تحليل الرابط..."}
-    ).json()
-    wait_msg_id = wait_resp["result"]["message_id"]
+        secret_header = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+        if secret_header != WEBHOOK_SECRET:
+            logger.warning("Invalid webhook secret received.")
+            return jsonify({"error": "Unauthorized"}), 401
 
     try:
-        info = extract_info(text)
+        update_data = request.get_json(force=True)
+        if not update_data:
+            return "ok", 200
+
+        # تشغيل المعالجة غير المتزامنة
+        asyncio.run(_process_update_async(update_data))
+        return "ok", 200
+
     except Exception as e:
-        edit_message(chat_id, wait_msg_id, f"❌ حدث خطأ أثناء التحليل: {str(e)}")
-        return jsonify({"ok": True})
+        logger.exception(f"Error processing webhook: {e}")
+        # نعيد 200 لتجنب إعادة المحاولة من تلجرام في حالات الخطأ
+        return "ok", 200
 
-    title = info.get("title", "بدون عنوان")
-    duration = info.get("duration", 0)
-    duration_str = f"{duration // 60}:{duration % 60:02d}" if duration else "غير متاح"
-    thumbnail = info.get("thumbnail")
-
-    qualities = get_qualities(info)
-    if not qualities:
-        edit_message(chat_id, wait_msg_id, "❌ لم يتم العثور على جودات متاحة في هذا الرابط.\n\nقد يحتاج الموقع إلى جلسة متصفح/كوكيز أو قد لا يحتوي على فيديو فعلي.")
-        return jsonify({"ok": True})
-
-    # إنشاء جلسة وتخزينها في Redis (صالح لمدة ساعة)
-    session_id = str(uuid.uuid4())
-    if r:
-        r.setex(f"session:{session_id}", 3600, json.dumps({"url": text, "chat_id": chat_id}))
-
-    # بناء أزرار الجودات
-    keyboard = []
-    for height in sorted(qualities.keys()):
-        f = qualities[height]
-        filesize = f.get("filesize") or f.get("filesize_approx")
-        if filesize:
-            size_mb = filesize / (1024 * 1024)
-            size_str = f"{size_mb:.1f} MB"
-            if filesize > 50 * 1024 * 1024:
-                size_str += " ⚠️"
-        else:
-            size_str = "حجم غير معروف"
-        label = f"{format_quality_label(f, height)} • {size_str}"
-        callback_data = f"q:{session_id}:{f['format_id']}"
-        keyboard.append([{"text": label, "callback_data": callback_data}])
-
-    reply_markup = {"inline_keyboard": keyboard}
-    caption = (
-        f"🎬 *{title}*\n"
-        f"⏱ المدة: {duration_str}\n"
-        f"📦 الجودات المتاحة: {len(keyboard)}\n\n"
-        "اختر الجودة المطلوبة:"
-    )
-
-    # حذف رسالة الانتظار وإرسال الصورة مع المعلومات
-    requests.post(f"{TELEGRAM_API}/deleteMessage", json={"chat_id": chat_id, "message_id": wait_msg_id})
-    if thumbnail:
-        send_photo(chat_id, thumbnail, caption, reply_markup)
-    else:
-        send_message(chat_id, caption, reply_markup, parse_mode="Markdown")
-
-    return jsonify({"ok": True})
-
-# ---------- معالجة اختيار الجودة ----------
-def handle_callback(callback):
-    callback_id = callback["id"]
-    chat_id = callback["message"]["chat"]["id"]
-    message_id = callback["message"]["message_id"]
-    data = callback.get("data", "")
-
-    if not data.startswith("q:"):
-        return jsonify({"ok": True})
-
-    _, session_id, format_id = data.split(":", 2)
-
-    session_data = None
-    if r:
-        raw = r.get(f"session:{session_id}")
-        if raw:
-            session_data = json.loads(raw)
-
-    if not session_data:
-        requests.post(f"{TELEGRAM_API}/answerCallbackQuery", json={
-            "callback_query_id": callback_id,
-            "text": "انتهت صلاحية الجلسة. أعد إرسال الرابط.",
-            "show_alert": True
-        })
-        return jsonify({"ok": True})
-
-    url = session_data["url"]
-
-    # الرد على الاستعلام
-    requests.post(f"{TELEGRAM_API}/answerCallbackQuery", json={
-        "callback_query_id": callback_id,
-        "text": "⏳ جاري تجهيز الملف..."
-    }, timeout=20)
-
-    # تعديل الرسالة الأصلية لإزالة الأزرار وإظهار حالة الانتظار
-    edit_message(chat_id, message_id, "⏳ جاري تنزيل الفيديو...\n\nقد يستغرق بعض الوقت حسب حجم الملف والموقع.")
-
-    # إطلاق GitHub Actions
-    if GITHUB_TOKEN and GITHUB_REPO and GITHUB_WORKFLOW_ID:
-        headers = {
-            "Authorization": f"Bearer {GITHUB_TOKEN}",
-            "Accept": "application/vnd.github+json",
-        }
-        branch = resolve_github_default_branch()
-        payload = {
-            "ref": branch,
-            "inputs": {
-                "url": url,
-                "format_id": format_id,
-                "chat_id": str(chat_id),
-                "message_id": str(message_id)
-            }
-        }
-        resp = requests.post(
-            f"https://api.github.com/repos/{GITHUB_REPO}/actions/workflows/{GITHUB_WORKFLOW_ID}/dispatches",
-            headers=headers,
-            json=payload,
-            timeout=30,
-        )
-        if resp.status_code not in (204, 201):
-            edit_message(chat_id, message_id, f"❌ فشل بدء التنزيل: {resp.text}")
-    else:
-        edit_message(chat_id, message_id, "❌ إعدادات GitHub Actions غير مكتملة.")
-
-    return jsonify({"ok": True})
+@app.route("/", methods=["GET"])
+def health():
+    """نقطة نهاية للتحقق من الصحة."""
+    return jsonify({"status": "running", "bot": "FastSaver Downloader"}), 200
