@@ -6,6 +6,8 @@ from flask import Flask, request, jsonify
 import yt_dlp
 import redis
 
+from api.yt_utils import build_yt_dlp_options
+
 app = Flask(__name__)
 
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -49,7 +51,9 @@ def extract_info(url):
         "no_warnings": True,
         "skip_download": True,
         "noplaylist": True,
+        "extract_flat": False,
     }
+    ydl_opts.update(build_yt_dlp_options())
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         return ydl.extract_info(url, download=False)
 

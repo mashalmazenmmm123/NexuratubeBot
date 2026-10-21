@@ -25,6 +25,15 @@
   - `GITHUB_REPO`: `username/repo` (مثال: `myuser/nexuratube`).
   - `GITHUB_WORKFLOW_ID`: `download.yml` (اسم ملف الـ workflow).
   - `REDIS_URL`: رابط Upstash Redis (يبدأ بـ `rediss://`).
+  - `YOUTUBE_PO_TOKEN`: قيمة PO Token من YouTube (إن توفرت).
+  - `YOUTUBE_VISITOR_DATA`: قيمة `visitor_data` من YouTube (إن توفرت).
+  - `YOUTUBE_PLAYER_CLIENTS`: قائمة العملاء، مثال: `web,android,ios`.
+  - `YOUTUBE_COOKIES_FILE`: مسار ملف كوكيز YouTube بصيغة Netscape (اختياري).
+  - `YOUTUBE_COOKIES_FROM_BROWSER`: اسم المتصفح إذا أردت استيراد الكوكيز مباشرة من المتصفح، مثال: `chrome` أو `firefox`.
+  - `YOUTUBE_USER_AGENT`: User-Agent اختياري لتمثيل المتصفح.
+  - `YOUTUBE_ACCEPT_LANGUAGE`: قيمة Accept-Language مثل `en-US,en;q=0.9`.
+
+> ملاحظة مهمة: إذا ظهر الخطأ `Sign in to confirm you’re not a bot` في YouTube، فالأصل هو أنك تحتاج إلى تمرير `PO Token` و`visitor_data` أو ملف cookies. هذا المشروع الآن يدعم تلك المتغيرات تلقائيًا داخل yt-dlp.
 
 ### 3. تعيين Webhook
 بعد نشر Vercel، نفّذ:

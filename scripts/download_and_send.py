@@ -3,6 +3,8 @@ import sys
 import requests
 import yt_dlp
 
+from api.yt_utils import build_yt_dlp_options
+
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 CHAT_ID = os.environ["CHAT_ID"]
 MESSAGE_ID = os.environ.get("MESSAGE_ID")
@@ -30,7 +32,9 @@ def main():
         "quiet": True,
         "no_warnings": True,
         "merge_output_format": "mp4",
+        "noplaylist": True,
     }
+    ydl_opts.update(build_yt_dlp_options())
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
