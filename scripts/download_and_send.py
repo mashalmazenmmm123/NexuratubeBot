@@ -24,7 +24,7 @@ def edit_message(message_id, text):
 
 def main():
     if MESSAGE_ID:
-        edit_message(MESSAGE_ID, "⏳ جاري تنزيل الفيديو...")
+        edit_message(MESSAGE_ID, "⏳ جاري تجهيز الفيديو...\n\nقد يستغرق بعض الوقت حسب الحجم والموقع.")
 
     ydl_opts = {
         "format": FORMAT_ID,
@@ -40,8 +40,12 @@ def main():
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(URL, download=True)
             filename = ydl.prepare_filename(info)
+            if not filename:
+                raise ValueError("لم يتم إرجاع اسم ملف صالح من المحرك.")
     except Exception as e:
         send_message(f"❌ فشل التنزيل: {str(e)}")
+        if MESSAGE_ID:
+            edit_message(MESSAGE_ID, f"❌ فشل التنزيل:\n{str(e)}")
         sys.exit(1)
 
     if not os.path.exists(filename):
@@ -72,11 +76,18 @@ def main():
         with open(filename, "rb") as f:
             files = {"video": f}
             data = {"chat_id": CHAT_ID, "caption": info.get("title", "")}
-            resp = requests.post(f"{TELEGRAM_API}/sendVideo", data=data, files=files)
+            resp = requests.post(f"{TELEGRAM_API}/sendVideo", data=data, files=files, timeout=60)
             if resp.status_code != 200:
                 send_message(f"❌ فشل إرسال الفيديو: {resp.text}")
+                if MESSAGE_ID:
+                    edit_message(MESSAGE_ID, f"❌ فشل إرسال الفيديو:\n{resp.text}")
+            else:
+                if MESSAGE_ID:
+                    edit_message(MESSAGE_ID, "✅ تم إرسال الفيديو بنجاح.")
     except Exception as e:
         send_message(f"❌ خطأ أثناء الإرسال: {str(e)}")
+        if MESSAGE_ID:
+            edit_message(MESSAGE_ID, f"❌ خطأ أثناء الإرسال:\n{str(e)}")
 
 if __name__ == "__main__":
     main()

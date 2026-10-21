@@ -182,6 +182,13 @@ def get_qualities(info):
 
     return available
 
+
+def format_quality_label(format_info, height=None):
+    height = height or _resolve_video_height(format_info) or 0
+    height_text = f"{height}p" if height else "بدون تسمية"
+    label = format_info.get("quality_label") or format_info.get("format_note") or height_text
+    return str(label)
+
 # ---------- Webhook ----------
 @app.route("/api/webhook", methods=["POST"])
 def webhook():
@@ -236,7 +243,7 @@ def webhook():
 
     qualities = get_qualities(info)
     if not qualities:
-        edit_message(chat_id, wait_msg_id, "❌ لم يتم العثور على جودات متاحة (360p–1080p).")
+        edit_message(chat_id, wait_msg_id, "❌ لم يتم العثور على جودات متاحة في هذا الرابط.\n\nقد يحتاج الموقع إلى جلسة متصفح/كوكيز أو قد لا يحتوي على فيديو فعلي.")
         return jsonify({"ok": True})
 
     # إنشاء جلسة وتخزينها في Redis (صالح لمدة ساعة)
@@ -253,15 +260,20 @@ def webhook():
             size_mb = filesize / (1024 * 1024)
             size_str = f"{size_mb:.1f} MB"
             if filesize > 50 * 1024 * 1024:
-                size_str += " ⚠️ (يتجاوز 50MB)"
+                size_str += " ⚠️"
         else:
             size_str = "حجم غير معروف"
-        label = f"{height}p ({size_str})"
+        label = f"{format_quality_label(f, height)} • {size_str}"
         callback_data = f"q:{session_id}:{f['format_id']}"
         keyboard.append([{"text": label, "callback_data": callback_data}])
 
     reply_markup = {"inline_keyboard": keyboard}
-    caption = f"🎬 *{title}*\n⏱ المدة: {duration_str}\n\nاختر الجودة (الحد الأقصى 50 ميجابايت):"
+    caption = (
+        f"🎬 *{title}*\n"
+        f"⏱ المدة: {duration_str}\n"
+        f"📦 الجودات المتاحة: {len(keyboard)}\n\n"
+        "اختر الجودة المطلوبة:"
+    )
 
     # حذف رسالة الانتظار وإرسال الصورة مع المعلومات
     requests.post(f"{TELEGRAM_API}/deleteMessage", json={"chat_id": chat_id, "message_id": wait_msg_id})
@@ -303,11 +315,11 @@ def handle_callback(callback):
     # الرد على الاستعلام
     requests.post(f"{TELEGRAM_API}/answerCallbackQuery", json={
         "callback_query_id": callback_id,
-        "text": "⏳ جاري بدء التنزيل..."
-    })
+        "text": "⏳ جاري تجهيز الملف..."
+    }, timeout=20)
 
     # تعديل الرسالة الأصلية لإزالة الأزرار وإظهار حالة الانتظار
-    edit_message(chat_id, message_id, "⏳ جاري تنزيل الفيديو... (قد يستغرق بعض الوقت)")
+    edit_message(chat_id, message_id, "⏳ جاري تنزيل الفيديو...\n\nقد يستغرق بعض الوقت حسب حجم الملف والموقع.")
 
     # إطلاق GitHub Actions
     if GITHUB_TOKEN and GITHUB_REPO and GITHUB_WORKFLOW_ID:
