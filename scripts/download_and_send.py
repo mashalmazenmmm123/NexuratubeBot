@@ -9,7 +9,7 @@ BOT_TOKEN = os.environ["BOT_TOKEN"]
 CHAT_ID = os.environ["CHAT_ID"]
 MESSAGE_ID = os.environ.get("MESSAGE_ID")
 URL = os.environ["URL"]
-FORMAT_ID = os.environ["FORMAT_ID"]
+FORMAT_ID = os.environ.get("FORMAT_ID") or "best[ext=mp4]/best"
 MAX_SIZE = 50 * 1024 * 1024  # 50 MB
 
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
@@ -43,6 +43,20 @@ def main():
     except Exception as e:
         send_message(f"❌ فشل التنزيل: {str(e)}")
         sys.exit(1)
+
+    if not os.path.exists(filename):
+        for candidate in [
+            "video.mp4",
+            "video.webm",
+            "video.mkv",
+            "video.mov",
+            "video.%(ext)s",
+        ]:
+            if candidate == "video.%(ext)s":
+                continue
+            if os.path.exists(candidate):
+                filename = candidate
+                break
 
     # التحقق من الحجم
     filesize = os.path.getsize(filename)

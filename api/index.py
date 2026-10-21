@@ -20,31 +20,65 @@ REDIS_URL = os.environ.get("REDIS_URL")              # رابط Upstash Redis
 
 r = redis.from_url(REDIS_URL) if REDIS_URL else None
 
-TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
+TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else None
+WELCOME_TEXT = (
+    "مرحبا بك في NexuraTube\n\n"
+    "أرسل لي رابط فيديو من YouTube أو مواقع مدعومة، "
+    "ثم اختر الجودة التي تريدها."
+)
 
 # ---------- دوال مساعدة ----------
 def send_message(chat_id, text, reply_markup=None, parse_mode=None):
+    if not TELEGRAM_API:
+        return
     payload = {"chat_id": chat_id, "text": text}
     if reply_markup:
         payload["reply_markup"] = json.dumps(reply_markup)
     if parse_mode:
         payload["parse_mode"] = parse_mode
-    requests.post(f"{TELEGRAM_API}/sendMessage", json=payload)
+    requests.post(f"{TELEGRAM_API}/sendMessage", json=payload, timeout=20)
 
 def edit_message(chat_id, message_id, text, reply_markup=None):
+    if not TELEGRAM_API:
+        return
     payload = {"chat_id": chat_id, "message_id": message_id, "text": text}
     if reply_markup:
         payload["reply_markup"] = json.dumps(reply_markup)
-    requests.post(f"{TELEGRAM_API}/editMessageText", json=payload)
+    requests.post(f"{TELEGRAM_API}/editMessageText", json=payload, timeout=20)
 
 def send_photo(chat_id, photo_url, caption, reply_markup=None):
+    if not TELEGRAM_API:
+        return
     payload = {"chat_id": chat_id, "photo": photo_url, "caption": caption}
     if reply_markup:
         payload["reply_markup"] = json.dumps(reply_markup)
-    requests.post(f"{TELEGRAM_API}/sendPhoto", json=payload)
+    requests.post(f"{TELEGRAM_API}/sendPhoto", json=payload, timeout=20)
 
 def send_chat_action(chat_id, action="typing"):
-    requests.post(f"{TELEGRAM_API}/sendChatAction", json={"chat_id": chat_id, "action": action})
+    if not TELEGRAM_API:
+        return
+    requests.post(f"{TELEGRAM_API}/sendChatAction", json={"chat_id": chat_id, "action": action}, timeout=20)
+
+
+def resolve_github_default_branch():
+    if not GITHUB_TOKEN or not GITHUB_REPO:
+        return "main"
+    try:
+        resp = requests.get(
+            f"https://api.github.com/repos/{GITHUB_REPO}",
+            headers={
+                "Authorization": f"Bearer {GITHUB_TOKEN}",
+                "Accept": "application/vnd.github+json",
+            },
+            timeout=20,
+        )
+        if resp.ok:
+            data = resp.json()
+            if isinstance(data, dict) and data.get("default_branch"):
+                return data["default_branch"]
+    except Exception:
+        pass
+    return "main"
 
 def extract_info(url):
     ydl_opts = {
@@ -167,14 +201,18 @@ def webhook():
 
     # معالجة الرسائل النصية
     message = update.get("message")
-    if not message or "text" not in message:
+    if not message:
         return jsonify({"ok": True})
 
     chat_id = message["chat"]["id"]
-    text = message["text"].strip()
+    text = (message.get("text") or "").strip()
+
+    if text in ("/start", "/help"):
+        send_message(chat_id, WELCOME_TEXT)
+        return jsonify({"ok": True})
 
     if not text.startswith("http"):
-        send_message(chat_id, "الرجاء إرسال رابط فيديو صالح.")
+        send_message(chat_id, "الرجاء إرسال رابط فيديو صالح.\n\nأو استخدم /start لعرض التعليمات.")
         return jsonify({"ok": True})
 
     # إرسال حالة انتظار
@@ -277,8 +315,9 @@ def handle_callback(callback):
             "Authorization": f"Bearer {GITHUB_TOKEN}",
             "Accept": "application/vnd.github+json",
         }
+        branch = resolve_github_default_branch()
         payload = {
-            "ref": "main",  # عدّله إذا كان الفرع الافتراضي مختلفًا
+            "ref": branch,
             "inputs": {
                 "url": url,
                 "format_id": format_id,
@@ -289,7 +328,8 @@ def handle_callback(callback):
         resp = requests.post(
             f"https://api.github.com/repos/{GITHUB_REPO}/actions/workflows/{GITHUB_WORKFLOW_ID}/dispatches",
             headers=headers,
-            json=payload
+            json=payload,
+            timeout=30,
         )
         if resp.status_code not in (204, 201):
             edit_message(chat_id, message_id, f"❌ فشل بدء التنزيل: {resp.text}")

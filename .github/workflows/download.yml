@@ -38,4 +38,13 @@ jobs:
           MESSAGE_ID: ${{ github.event.inputs.message_id }}
           URL: ${{ github.event.inputs.url }}
           FORMAT_ID: ${{ github.event.inputs.format_id }}
+          YOUTUBE_PO_TOKEN: ${{ secrets.YOUTUBE_PO_TOKEN }}
+          YOUTUBE_VISITOR_DATA: ${{ secrets.YOUTUBE_VISITOR_DATA }}
+          YOUTUBE_PLAYER_CLIENTS: ${{ vars.YOUTUBE_PLAYER_CLIENTS || 'web,android,ios' }}
+          YOUTUBE_COOKIES_FILE: ${{ secrets.YOUTUBE_COOKIES_FILE }}
+          YOUTUBE_COOKIES_FROM_BROWSER: ${{ secrets.YOUTUBE_COOKIES_FROM_BROWSER }}
+          YOUTUBE_USER_AGENT: ${{ vars.YOUTUBE_USER_AGENT }}
+          YOUTUBE_ACCEPT_LANGUAGE: ${{ vars.YOUTUBE_ACCEPT_LANGUAGE }}
+          YOUTUBE_CLIENT_NAME: ${{ vars.YOUTUBE_CLIENT_NAME }}
+          YOUTUBE_CLIENT_VERSION: ${{ vars.YOUTUBE_CLIENT_VERSION }}
         run: python scripts/download_and_send.py
