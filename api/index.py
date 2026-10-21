@@ -41,4 +41,4 @@ def webhook():
 @app.route("/", methods=["GET"])
 def health():
     """نقطة نهاية للتحقق من الصحة."""
-    return jsonify({"status": "running", "bot": "FastSaver Downloader"}), 200
+    return jsonify({"status": "running", "bot": "FastSaver Downloader"}), 200 
